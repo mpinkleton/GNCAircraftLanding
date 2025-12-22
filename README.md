@@ -1,20 +1,23 @@
-Requirements (use pip to install Python dependencies):
+**Dependencies** (use pip to install Python packages):
 - CPP: [Eigen](https://eigen.tuxfamily.org/) C++ Library 
 - CPP: CMake
 - Python: Numpy, Matplotlib, Pandas
 - Python: [flightgear_python](https://pypi.org/project/flightgear-python/) (optional)
 - [FlightGear](https://www.flightgear.org/download/) (optional)
 
-For better understanding of the GN&C algorithm and aircraft dynamics, please understand and run the files inside **sandbox_py**, before going over cpp/.
+For better understanding of the GN&C algorithm and aircraft dynamics, please examine and run the files in **sandbox_py**.
 
 **Build the C++ application:**
-Run these cmake commands in sequence:
-- cd cpp/build
+Run these commands (tested on Win/Mac/Linux):
+- cd cpp
+- mkdir build
 - cmake ..
 - cmake --build .
-- run exe inside the build/Release folder
+- run FixedWingGNC exe in build/Release: (Mac/Linux cmd: ./FixedWingGNC)
 
-A file "trajectory.csv" should appear either in your home folder or in cpp/build/Release (recommended: run the exe from terminal).
+**NOTE:** If you get an Eigen related error, be sure you have downloaded **and extracted** the eigen-#.#.# folder, it does not matter where the folder is located.
+
+A file: trajectory.csv, will appear either in your home folder or directly in cpp/build/Release (recommended to run FixedWingGNC from terminal).
 
 **Visualize flight trajectory in Python**
 - Run fg_sim.py inside **py_fg**
