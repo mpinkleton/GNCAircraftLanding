@@ -1,3 +1,6 @@
+**Video WalkThrough**
+- [Here](https://www.youtube.com/watch?v=vNyCzOTHBpg) is the YouTube link!
+
 **Dependencies** (use pip to install Python packages):
 - CPP: [Eigen](https://eigen.tuxfamily.org/) C++ Library 
 - CPP: CMake
@@ -13,7 +16,7 @@ Run these commands (tested on Win/Mac/Linux):
 - mkdir build
 - cmake ..
 - cmake --build .
-- run FixedWingGNC exe in build/Release: (Mac/Linux cmd: ./FixedWingGNC)
+- run FixedWingGNC exe in build/Release, ideally from command line
 
 **NOTE:** If you get an Eigen related error, be sure you have downloaded **and extracted** the eigen-#.#.# folder, it does not matter where the folder is located.
 
