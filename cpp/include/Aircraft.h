@@ -25,6 +25,11 @@ private:
     float psi;
     //Constant speed (m/s)
     const float V_a = 115.0f;
+    //Actuator rate limits (deg/s) - max change in surface deflection per second
+    const float stabRateLimit = 60.0f;
+    const float ailRateLimit = 60.0f;
+    //Limit change in actuator position to rateLimit*dT per timestep
+    float rateLimit(float u_cmd, float u_prev, float rateLimitDeg);
 
 public:
     Aircraft();

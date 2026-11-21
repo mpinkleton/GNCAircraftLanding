@@ -91,13 +91,13 @@ void Simulator::runSim() {
         float lon_a = rad2deg(std::get<1>(LLA_a));     
         float alt_a = std::get<2>(LLA_a);  
 
-        //Get rudder command   
-        float del_r = sys->getRudder();
+        //Get actual (rate-limited) actuator positions for logging
+        auto [del_e_act, del_a_act, del_r] = sys->getActuators();
 
         if (i % logFrequency == 0){
             //Log: t, X_a, Y_a, Z_a, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP
             PLOG_INFO << std::setprecision(12) << time << "," << std::get<0>(XYZ_a) << "," << std::get<1>(XYZ_a) << "," << std::get<2>(XYZ_a) << "," << lat_a << "," << lon_a << "," 
-                        << alt_a << "," << phi << "," << theta << "," << psi << "," << del_e << "," << del_a << "," << del_r << ","
+                        << alt_a << "," << phi << "," << theta << "," << psi << "," << del_e_act << "," << del_a_act << "," << del_r << ","
                         << std::get<0>(XYZ_SWP) << "," << std::get<1>(XYZ_SWP) << "," << std::get<2>(XYZ_SWP);
         }
 

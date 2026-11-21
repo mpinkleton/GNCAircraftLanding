@@ -55,12 +55,20 @@ Eigen::MatrixXf Aircraft::returnLateralStates(){
     return Xlat;
 }
 
+float Aircraft::rateLimit(float u_cmd, float u_prev, float rateLimitDeg){
+    float maxStep = deg2rad(rateLimitDeg) * dT;
+    float step = u_cmd - u_prev;
+    if (step > maxStep) step = maxStep;
+    if (step < -maxStep) step = -maxStep;
+    return u_prev + step;
+}
+
 void Aircraft::setLongitudinalInput(float u_lon){
-    Ulon(0,0) = u_lon;
+    Ulon(0,0) = rateLimit(u_lon, Ulon(0,0), stabRateLimit);
 }
 
 void Aircraft::setLateralInput(float ail){
-    Ulat(0,0) = ail;
+    Ulat(0,0) = rateLimit(ail, Ulat(0,0), ailRateLimit);
 }
 
 float Aircraft::getRudder(){

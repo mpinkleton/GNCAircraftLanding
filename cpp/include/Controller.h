@@ -4,8 +4,8 @@
 //Controller gains and input calculation
 
 struct LongitudinalGains {
-    float K_q = 0.4;
-    float K_th = 0.25;
+    float K_q = 0.3;
+    float K_th = 2.65;
 };
 
 struct LateralGains {
