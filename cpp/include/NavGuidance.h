@@ -4,7 +4,8 @@
 #include "common.h"
 
 struct LongitudinalGuidance{
-    float K_z = 0.25;
+    //Pitch command (rad) per meter of altitude error. 0.02 => ~1 deg per 1 m (airliner-gentle)
+    float K_z = 0.02;
 };
 
 struct LateralGuidance{
@@ -39,6 +40,7 @@ public:
     void stepWaypoint(float V_a, float X_a, float Y_a, float Z_a);
     std::tuple<double, double> determineFinalWaypoint(float dist, float psi, float lat, float lon);
     std::tuple<float, float, float> returnWaypointNED(size_t idx);
+    size_t numWaypoints() { return XWP.size(); }
     std::tuple<float, float, float> returnSyntheticWaypoint();
 private:
     std::vector<float> XWP;

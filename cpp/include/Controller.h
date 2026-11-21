@@ -4,13 +4,15 @@
 //Controller gains and input calculation
 
 struct LongitudinalGains {
-    float K_q = 0.3;
-    float K_th = 2.65;
+    //Tuned for the B777-class model (weak pitch control power, ~1 rad/s short period)
+    float K_q = 2.5;
+    float K_th = 2.5;
 };
 
 struct LateralGains {
-    float K_p = 0.04;
-    float K_phi = 0.35;
+    //Tuned for the B777-class model (weak roll control power, ~1.1 s roll mode)
+    float K_p = 2.0;
+    float K_phi = 4.0;
 };
 
 class Controller {

@@ -12,6 +12,13 @@ headingOffset = (4*math.pi/180)
 #runway elevation - change
 runwayElev = 175
 
+#max surface deflection (rad) - matches stabPosLimit/ailPosLimit in Aircraft.h (25 deg)
+maxDeflection = 25*math.pi/180
+
+def surfNorm(rad):
+    #radians -> FlightGear normalized surface position, clipped to -1..1
+    return max(-1.0, min(1.0, rad/maxDeflection))
+
 def runFG():
     """
     Start FlightGear with `--native-fdm=socket,out,30,localhost,5501,udp --native-fdm=socket,in,30,localhost,5502,udp`
@@ -28,18 +35,21 @@ def runFG():
         time.sleep(0.025)
 
 def fdm_callback(fdm_data, event_pipe):
-    global i, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r
+    global i, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, V
     fdm_data.lat_rad = Lat[i]
     fdm_data.lon_rad = Lon[i]
     fdm_data.alt_m = Alt[i]
     fdm_data.phi_rad = phi[i]
     fdm_data.theta_rad = theta[i]
     fdm_data.psi_rad = psi[i] - headingOffset
-    fdm_data.elevator = del_e[i]
-    fdm_data.left_aileron = del_a[i]
-    fdm_data.right_aileron = -1*del_a[i]
-    fdm_data.rudder = del_r[i]
-    fdm_data.vcas = 190.0
+    #FlightGear surface positions are normalized (-1..1), so scale radians by the max deflection.
+    #Sim: +elevator = nose down, +aileron = roll left, +rudder = yaw left.
+    #FG:  +elevator = nose down, +aileron = roll right, +rudder = yaw right.
+    fdm_data.elevator = surfNorm(del_e[i])
+    fdm_data.left_aileron = -surfNorm(del_a[i])
+    fdm_data.right_aileron = surfNorm(del_a[i])
+    fdm_data.rudder = -surfNorm(del_r[i])
+    fdm_data.vcas = V[i]*1.94384   # m/s -> knots
     #Gear down - try it
     if (Alt[i] < 900):
         print("Gear down")
@@ -81,8 +91,8 @@ numeric_data = df["Message"].str.strip('"')
 
 # Split into 8 columns
 #t, X_a, Y_a, Z_a, Lat, Lon, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP
-cols = ["t", "X_a", "Y_a", "Z_a", "Lat", "Lon", "Alt", "phi", "theta",  "psi", 
-        "del_e", "del_a", "del_r", "XWP", "YWP", "ZWP"]
+cols = ["t", "X_a", "Y_a", "Z_a", "Lat", "Lon", "Alt", "phi", "theta",  "psi",
+        "del_e", "del_a", "del_r", "XWP", "YWP", "ZWP", "V"]
 data = numeric_data.str.split(",", expand=True)
 data.columns = cols
 
@@ -108,6 +118,7 @@ del_r = data["del_r"].to_list()
 WPX = data["XWP"].to_list()
 WPY = data["YWP"].to_list()
 WPZ = data["ZWP"].to_list()
+V = data["V"].to_list()   # airspeed (m/s)
 
 # Optional: view result
 #print(data.head())

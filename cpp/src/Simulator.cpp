@@ -18,14 +18,14 @@ void Simulator::updateWaypoints(float lat, float lon, float alt) {
 
 void Simulator::setLandingSite(float lat, float lon, float alt, float psi) {
 
-    //Set a distance of 5km behind the runway threshold
-    float dist = 5000;
+    //Set a distance of 12km behind the runway threshold (airliner-style final approach)
+    float dist = 12000;
     float psi_behind = deg2rad(psi) + M_PI;
     float lat_rad = deg2rad(lat);
     float lon_rad = deg2rad(lon);
 
-    //Offset altitude by 800m (customizable)
-    float alt_offset = alt + 800;
+    //Offset altitude by 700m (customizable) => ~3.3 deg glideslope over 12km
+    float alt_offset = alt + 700;
 
     //Calculate waypoint position based on distance and heading
     auto finalWP = gnc->determineFinalWaypoint(dist, psi_behind, lat_rad, lon_rad);
@@ -46,12 +46,29 @@ void Simulator::runSim() {
     sys->setHeading(psi_c);
     auto V_a = sys->getSpeed();
 
-    //Initialize synthetic waypoint with a time horizon of 8s (customizable)
-    gnc->initializeSyntheticWaypoint(V_a, 8.0f);
+    //Initialize synthetic waypoint with a time horizon of 20s (customizable)
+    //Look-ahead (V_a*T_H = 2.3km) should be about the turn radius (~2.5km for an airliner at 115 m/s)
+    gnc->initializeSyntheticWaypoint(V_a, 20.0f);
+
+    //Runway threshold (last waypoint) for the approach speed schedule
+    auto RWY = gnc->returnWaypointNED(gnc->numWaypoints() - 1);
 
     for (int i = 0; i < numTimesteps; ++i) {
-        
+
         float time = i*dT;
+
+        //Approach speed schedule (B777-like), by horizontal distance to the runway threshold:
+        //  >= 18 km: 115 m/s (224 kt)   18 -> 12 km (FAF): slow to 85 m/s (165 kt)
+        //  12 -> 6 km: slow to 75 m/s (146 kt, ~Vref + 5)   < 6 km: hold 75 m/s
+        auto XYZ_now = sys->getPosition();
+        float d_rwy = std::hypot(std::get<0>(RWY) - std::get<0>(XYZ_now), std::get<1>(RWY) - std::get<1>(XYZ_now));
+        float V_sched;
+        if (d_rwy >= 18000.0f)      V_sched = 115.0f;
+        else if (d_rwy >= 12000.0f) V_sched = 85.0f + (115.0f - 85.0f)*(d_rwy - 12000.0f)/6000.0f;
+        else if (d_rwy >= 6000.0f)  V_sched = 75.0f + (85.0f - 75.0f)*(d_rwy - 6000.0f)/6000.0f;
+        else                        V_sched = 75.0f;
+        sys->setSpeedCommand(V_sched);
+        V_a = sys->getSpeed();
 
         //Set aircraft heading setpoint
         auto XYZ_SWP = gnc->returnSyntheticWaypoint();
@@ -95,10 +112,10 @@ void Simulator::runSim() {
         auto [del_e_act, del_a_act, del_r] = sys->getActuators();
 
         if (i % logFrequency == 0){
-            //Log: t, X_a, Y_a, Z_a, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP
+            //Log: t, X_a, Y_a, Z_a, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP, V_a
             PLOG_INFO << std::setprecision(12) << time << "," << std::get<0>(XYZ_a) << "," << std::get<1>(XYZ_a) << "," << std::get<2>(XYZ_a) << "," << lat_a << "," << lon_a << "," 
                         << alt_a << "," << phi << "," << theta << "," << psi << "," << del_e_act << "," << del_a_act << "," << del_r << ","
-                        << std::get<0>(XYZ_SWP) << "," << std::get<1>(XYZ_SWP) << "," << std::get<2>(XYZ_SWP);
+                        << std::get<0>(XYZ_SWP) << "," << std::get<1>(XYZ_SWP) << "," << std::get<2>(XYZ_SWP) << "," << V_a;
         }
 
 
