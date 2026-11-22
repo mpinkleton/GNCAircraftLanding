@@ -3,50 +3,27 @@
 
 #include "common.h"
 
-
+// Nonlinear 6-DOF rigid-body aircraft model (flat earth, body axes), B777-class.
+// Boeing 777 data is not public, so the aerodynamics use classic Boeing 747 data
+// (Etkin & Reid; Heffley & Jewell NASA CR-2144), with nonlinear lift (stall) and drag.
 class Aircraft {
 private:
-    // System Matrices and State Vectors
-    Eigen::MatrixXf Alon; 
-    Eigen::MatrixXf Blon;  
-    Eigen::MatrixXf Alat; 
-    Eigen::MatrixXf Blat; 
-    Eigen::MatrixXf Xlon; 
-    Eigen::MatrixXf Xlat; 
-    Eigen::MatrixXf Ulon;
-    Eigen::MatrixXf Ulat;
-    //Yaw rate Derivative
-    float dr_dt{0.0f};
-    //Positions
-    float Xpos{0.0f};
-    float Ypos{0.0f};
-    float Zpos{0.0f};
-    //Heading
-    float psi{0.0f};
-    //True airspeed (m/s). The linear model is re-linearized about this speed every step:
-    //the speed perturbation u is integrated into V_a and then reset to zero.
-    float V_a = 115.0f;
-    //Engine: thrust minus level-flight drag at the current speed, as a fraction of weight (T/W),
-    //with a first-order spool-up/down lag. Min represents idle plus approach drag
-    //(flaps/gear/speedbrakes); max is the thrust available above level-flight trim.
-    float throttle{0.0f};
-    float throttleCmd{0.0f};
-    const float engineTau = 3.0f;
-    const float throttleMin = -0.10f;
-    const float throttleMax = 0.20f;
-    //Rebuild A/B matrices for the current airspeed and altitude (air density)
-    void updateAero();
-    //ISA air density at the current altitude (kg/m^3)
-    float airDensity();
-    //Trim (level flight) lift model, used for absolute angle of attack / pitch attitude.
-    //The A/B model works in perturbations from trim; these give the trim values back.
-    const float weight = 2.83176e6f;     //N (B747 reference weight)
-    const float wingArea = 511.0f;       //m^2
-    const float CL_alpha = 5.5f;         //lift slope (1/rad), typical large transport
-    const float alphaZeroLift = -3.0f;   //body angle of attack at zero lift, clean (deg) - estimate
-    const float flapsCL = 0.75f;         //lift added by full landing flaps (approximation)
-    const float flapsUpSpeed = 110.0f;   //flaps start extending below this speed (m/s, ~214 kt)
-    const float flapsFullSpeed = 85.0f;  //full landing flaps at/below this speed (m/s, ~165 kt)
+    // ---------------- State ----------------
+    float u{115.0f}, v{0.0f}, w{0.0f};       // body-axis velocities (m/s)
+    float p{0.0f}, q{0.0f}, r{0.0f};         // body-axis rates (rad/s)
+    float phi{0.0f}, theta{0.0f}, psi{0.0f}; // Euler angles (rad)
+    float Xpos{0.0f}, Ypos{0.0f}, Zpos{0.0f}; // NED position (m), Z down
+    float alphaPrev{0.0f};                   // previous alpha, for alpha-dot terms
+
+    // ---------------- Actuators ----------------
+    float de{0.0f};                          // stabilator (rad), + = trailing edge down (nose down)
+    float da{0.0f};                          // aileron (rad), + = roll left
+    float dr{0.0f};                          // rudder (rad), + = yaw left (driven by yaw damper)
+    float r_prev{0.0f};                      // previous yaw rate, for the yaw damper
+    float throttle{0.0f}, throttleCmd{0.0f}; // engine thrust as a fraction of max thrust
+    const float engineTau = 3.0f;            // engine spool lag (s)
+    const float throttleMin = 0.05f;         // idle
+    const float throttleMax = 1.0f;
     //Actuator rate limits (deg/s) - max change in surface deflection per second
     const float stabRateLimit = 60.0f;
     const float ailRateLimit = 60.0f;
@@ -56,8 +33,51 @@ private:
     //Limit actuator to +/-posLimitDeg, and its change to rateLimitDeg*dT per timestep
     float actuatorLimit(float u_cmd, float u_prev, float rateLimitDeg, float posLimitDeg);
 
+    // ---------------- Mass and geometry (B747 reference, Etkin & Reid) ----------------
+    const float g = 9.81f;
+    const float weight = 2.83176e6f;         // N
+    const float mass = 2.83176e6f/9.81f;     // kg
+    const float S = 511.0f;                  // wing area (m^2)
+    const float cbar = 8.324f;               // mean chord (m)
+    const float Ix = 0.247e8f, Iy = 0.449e8f, Iz = 0.673e8f;  // kg m^2 (approximate; Ixz neglected)
+    const float Tmax = 0.30f*2.83176e6f;     // max total thrust (N), T/W = 0.3
+
+    // ---------------- Longitudinal aerodynamics (nondimensional, per rad) ----------------
+    // Derived from the B747 dimensional derivatives (Etkin & Reid, MIT 16.333). Low-speed
+    // lift slope used; Mach 0.8 compressibility terms (Cm_u etc.) omitted.
+    const float CL_alpha = 5.5f;             // lift slope
+    const float alphaZeroLift = -3.0f;       // body angle of attack at zero lift, clean (deg) - estimate
+    const float CL_q = 5.92f, CL_adot = -5.90f, CL_de = 0.3648f;
+    const float Cm_alpha = -1.023f, Cm_q = -23.92f, Cm_adot = -6.31f, Cm_de = -1.444f;
+    float alphaRef{0.0f};                    // alpha with zero pitching moment at de = 0 (set in constructor)
+    const float CLmaxClean = 1.5f;           // max lift coefficient, clean
+    const float CLmaxFlaps = 0.9f;           // extra max lift with full flaps
+    const float CD0 = 0.020f, K_induced = 0.045f;   // drag polar CD = CD0 + K*CL^2 (L/D ~17 clean)
+    // Flaps (extend with decreasing speed, as on a real approach) and gear
+    const float flapsCL = 0.75f;             // lift added by full landing flaps
+    const float flapsCD = 0.045f;            // drag added by full landing flaps
+    const float gearCD = 0.020f;             // drag added by landing gear (down with flaps > 0.5)
+    const float speedbrakeCD = 0.040f;       // drag added by fully deployed flight spoilers
+    const float speedbrakeRate = 0.5f;       // deploy/retract rate (fraction per second)
+    float speedbrake{0.0f}, speedbrakeCmd{0.0f};   // 0 (stowed) .. 1 (full)
+    const float flapsUpSpeed = 110.0f;       // flaps start extending below this speed (m/s, ~214 kt)
+    const float flapsFullSpeed = 85.0f;      // full landing flaps at/below this speed (m/s, ~165 kt)
+
+    // ---------------- Lateral aerodynamics ----------------
+    // B747 primed derivatives (angular accelerations), Etkin & Reid via MathWorks, at the
+    // reference condition below; scaled with rho*V (rate terms) and rho*V^2 (beta/control terms).
+    const float rhoRef = 0.3045f, VRef = 235.9f;
+
+    //Static lift coefficient (with flaps and stall) at angle of attack alpha (rad)
+    float liftCoefficient(float alpha, float flaps);
+    //ISA air density at altitude h (m)
+    float airDensity(float h);
+
 public:
     Aircraft();
+    //Set level, trimmed flight (alpha, stabilator, thrust) at the given airspeed
+    void trim(float V);
+    // [speed (m/s), alpha (rad), q (rad/s), theta (rad)] and [beta (rad), p, r (rad/s), phi (rad)]
     Eigen::MatrixXf returnLongitudinalStates();
     Eigen::MatrixXf returnLateralStates();
     void setLongitudinalInput(float u_lon);
@@ -68,13 +88,14 @@ public:
     void setHeading(float psi_c);
     float getHeading();
     std::tuple<float, float, float> getPosition();
+    std::tuple<float, float, float> getVelocityNED();
     std::tuple<float, float, float> getActuators();
     float getSpeed();            //true airspeed (m/s)
     float getFlaps();            //flap extension 0 (up) .. 1 (full landing flaps)
-    float getTrimAlpha();        //trim body angle of attack for the current speed/altitude/flaps (rad)
     void setThrottleCommand(float thr);
     float getThrottle();
+    void setSpeedbrakeCommand(float sb);
+    float getSpeedbrake();
 };
 
 #endif
-

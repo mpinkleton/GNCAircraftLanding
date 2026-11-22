@@ -35,7 +35,7 @@ def runFG():
         time.sleep(0.025)
 
 def fdm_callback(fdm_data, event_pipe):
-    global i, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, V, flaps
+    global i, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, V, flaps, speedbrake
     fdm_data.lat_rad = Lat[i]
     fdm_data.lon_rad = Lon[i]
     fdm_data.alt_m = Alt[i]
@@ -51,6 +51,7 @@ def fdm_callback(fdm_data, event_pipe):
     fdm_data.rudder = -surfNorm(del_r[i])
     fdm_data.left_flap = flaps[i]    # 0 (up) .. 1 (full), already normalized
     fdm_data.right_flap = flaps[i]
+    fdm_data.speedbrake = speedbrake[i]
     fdm_data.vcas = V[i]*1.94384   # m/s -> knots
     #Gear down - try it
     if (Alt[i] < 900):
@@ -95,7 +96,7 @@ numeric_data = df["Message"].str.strip('"')
 #t, X_a, Y_a, Z_a, Lat, Lon, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP
 cols = ["t", "X_a", "Y_a", "Z_a", "Lat", "Lon", "Alt", "phi", "theta",  "psi",
         "del_e", "del_a", "del_r", "XWP", "YWP", "ZWP", "V",
-        "alpha", "V_err", "thrust", "V_sched", "flaps"]
+        "alpha", "V_err", "thrust", "V_sched", "flaps", "speedbrake"]
 data = numeric_data.str.split(",", expand=True)
 data.columns = cols
 
@@ -125,7 +126,8 @@ V = data["V"].to_list()   # airspeed (m/s)
 alpha = data["alpha"].to_list()       # body angle of attack (rad)
 flaps = data["flaps"].to_list()       # flap extension 0 (up) .. 1 (full landing flaps)
 V_err = data["V_err"].to_list()       # airspeed - scheduled airspeed (m/s)
-thrust = data["thrust"].to_list()     # thrust change from level-flight trim (fraction of weight)
+thrust = data["thrust"].to_list()     # throttle, fraction of max thrust (0.05 = idle)
+speedbrake = data["speedbrake"].to_list()   # flight spoilers 0 (stowed) .. 1 (full)
 V_sched = data["V_sched"].to_list()   # scheduled airspeed (m/s)
 
 # Optional: view result
@@ -229,9 +231,11 @@ axs[0].set_title('Speed Control and Flight Path')
 axs[0].legend()
 axs[0].grid(True, alpha=0.3)
 
-axs[1].plot(t, thrust, color='red', linewidth=1.5)
-axs[1].axhline(-0.10, color='gray', linestyle=':', linewidth=1)   # idle + approach drag limit
-axs[1].set_ylabel('Thrust - drag (T/W)')
+axs[1].plot(t, thrust, color='red', linewidth=1.5, label='Throttle')
+axs[1].plot(t, speedbrake, color='purple', linestyle='--', linewidth=1.2, label='Speedbrake')
+axs[1].axhline(0.05, color='gray', linestyle=':', linewidth=1)   # idle
+axs[1].set_ylabel('Throttle / speedbrake (0-1)')
+axs[1].legend()
 axs[1].grid(True, alpha=0.3)
 
 axs[2].plot(t, alpha_deg, color='green', linewidth=1.5, label=r'$\alpha$ (body)')

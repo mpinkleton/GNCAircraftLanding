@@ -18,19 +18,31 @@ struct LateralGains {
 };
 
 struct SpeedGains {
-    //Autothrottle PI gains: thrust (fraction of weight) per m/s of speed error, and per m of integrated error
-    float K_u = 0.05;
-    float K_ui = 0.005;
-    //Thrust command limits - match throttleMin/throttleMax in Aircraft.h
-    float thrMin = -0.10;
-    float thrMax = 0.20;
+    //Autothrottle PI gains: throttle (fraction of max thrust, T/W 0.3) per m/s of speed error,
+    //and per m of integrated error
+    float K_u = 0.15;
+    float K_ui = 0.015;
+    //Throttle command limits - match throttleMin/throttleMax in Aircraft.h
+    float thrMin = 0.05;
+    float thrMax = 1.0;
 };
 
 class Controller {
     public:
         //Autothrottle: u_err = true airspeed - reference airspeed (m/s), positive = too fast
+        //Speedbrakes, as a crew would use them: only when the throttle is already at idle and the
+        //aircraft is still more than 2 m/s fast; deploy in proportion to the overspeed (full at 10 m/s)
+        float speedbrakeCommand(float u_err, float thr_cmd) {
+            if (thr_cmd > SpdGains.thrMin + 0.01f) return 0.0f;
+            float sb = (u_err - 2.0f)/8.0f;
+            if (sb < 0.0f) sb = 0.0f;
+            if (sb > 1.0f) sb = 1.0f;
+            return sb;
+        }
+        //Throttle the autothrottle starts from (trim thrust)
+        void setThrottleTrim(float thr) { thrTrim = thr; }
         float throttleCommand(float u_err) {
-            float cmd = -(SpdGains.K_u*u_err + SpdGains.K_ui*uInt);
+            float cmd = thrTrim - (SpdGains.K_u*u_err + SpdGains.K_ui*uInt);
             //Anti-windup: only integrate when not saturated, or when integrating pulls out of saturation
             bool satHigh = cmd >= SpdGains.thrMax;
             bool satLow  = cmd <= SpdGains.thrMin;
@@ -50,6 +62,7 @@ class Controller {
         LateralGains LatGains;
         SpeedGains SpdGains;
         float uInt{0.0f};   //integrated speed error (m)
+        float thrTrim{0.0f};
 };
 
 #endif // CONTROLLER_H

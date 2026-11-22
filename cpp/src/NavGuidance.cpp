@@ -35,10 +35,11 @@ void NavGuidance::constrainValue(float &val, float minVal, float maxVal){
 }
 
 float NavGuidance::pitchCommand(float Z_c, float Z, float Zdot_c, float Zdot){
-    //Altitude (Z, down) error plus vertical speed error damping
-    float theta_c = LongGNC.K_z * (Z - Z_c) + LongGNC.K_hd * (Zdot - Zdot_c);
-    constrainValue(theta_c, -0.45, 0.45);
-    return theta_c;
+    //Returns a flight path angle command (rad): altitude (Z, down) error plus vertical speed
+    //error damping. The pitch attitude command is this plus the current angle of attack.
+    float gamma_c = LongGNC.K_z * (Z - Z_c) + LongGNC.K_hd * (Zdot - Zdot_c);
+    constrainValue(gamma_c, -0.15, 0.15);
+    return gamma_c;
 }
 
 float NavGuidance::rollCommand(float psi_c, float psi){

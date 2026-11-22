@@ -1,95 +1,75 @@
 #include "Aircraft.h"
 
 Aircraft::Aircraft(){
-    
-    Alon = Eigen::MatrixXf(4,4);
-    Blon = Eigen::MatrixXf(4,2);
-    Alat = Eigen::MatrixXf(4,4);
-    Blat = Eigen::MatrixXf(4,2);
-    Xlon = Eigen::MatrixXf(4,1);
-    Xlat = Eigen::MatrixXf(4,1);
-    Ulon = Eigen::MatrixXf(2,1);
-    Ulat = Eigen::MatrixXf(2,1);
-
-    updateAero();
-
-    Xlon << 0.0,
-             0.0,
-             0.0,
-             0.0;
-
-    Xlat << 0.0,
-             0.0,
-             0.0,
-             0.0;
-
-    Ulon << 0.0,
-            0.0;
-
-    Ulat << 0.0,
-            0.0;
+    //Zero pitching moment (at de = 0) is placed at the level-flight trim alpha for
+    //115 m/s at 1500 m, clean - the condition the original linear model was built around
+    float CLref = weight/(0.5f*airDensity(1500.0f)*115.0f*115.0f*S);
+    alphaRef = CLref/CL_alpha + deg2rad(alphaZeroLift);
 }
 
-void Aircraft::updateAero(){
-    // Heavy widebody transport model (B777-class).
-    // Boeing 777 stability derivatives are not public, so this uses the classic Boeing 747
-    // data (Etkin & Reid; Heffley & Jewell NASA CR-2144) at M0.8 / 40,000 ft as a reference,
-    // rescaled every step to the current airspeed V_a and air density at the current altitude.
-    // Rate/velocity derivatives scale with rho*V, control derivatives with rho*V^2, w-dot terms with rho.
-    // Limitation: reference data is clean wing (no flaps), so low-speed approach handling is approximate.
-    // Sign conventions: +stabilator => nose down, +aileron => roll left, +rudder => yaw left.
+float Aircraft::airDensity(float h){
+    return 1.225f * std::pow(1.0f - 2.25577e-5f*h, 4.25588f);   //ISA troposphere density
+}
 
-    //Reference condition and scale factors
-    const float rho0 = 0.3045f, U0 = 235.9f;
-    float rho = airDensity();
-    float V = V_a;
-    float fV  = (rho*V)/(rho0*U0);
-    float fV2 = (rho*V*V)/(rho0*U0*U0);
-    float fr  = rho/rho0;
+float Aircraft::getFlaps(){
+    float V = getSpeed();
+    float f = (flapsUpSpeed - V)/(flapsUpSpeed - flapsFullSpeed);
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    return f;
+}
 
-    //--- Longitudinal: B747 dimensional derivatives (SI), body states [u, w, q, theta]
-    const float g = 9.81f, S = 511.0f, cbar = 8.324f, Iyy = 0.449e8f, m = 2.83176e6f/g;
-    float Xu = -1.982e3f*fV, Xw = 4.025e3f*fV;
-    float Zu = -2.595e4f*fV, Zw = -9.030e4f*fV, Zq = -4.524e5f*fV, Zwd = 1.909e3f*fr;
-    float Mu = 1.593e4f*fV,  Mw = -1.563e5f*fV, Mq = -1.521e7f*fV, Mwd = -1.702e4f*fr;
+float Aircraft::liftCoefficient(float alpha, float flaps){
+    //Linear lift curve, flaps shift it up
+    float CL = CL_alpha*(alpha - deg2rad(alphaZeroLift)) + flapsCL*flaps;
+    //Stall: lift peaks at CLmax, then falls off (simple post-stall model)
+    float CLmax = CLmaxClean + CLmaxFlaps*flaps;
+    float alphaStall = (CLmax - flapsCL*flaps)/CL_alpha + deg2rad(alphaZeroLift);
+    if (alpha > alphaStall) {
+        CL = CLmax - 2.0f*(alpha - alphaStall);
+        if (CL < 0.6f*CLmax) CL = 0.6f*CLmax;
+    }
+    return CL;
+}
+
+void Aircraft::trim(float V){
+    //Level flight: solve lift = weight and pitching moment = 0 for alpha and stabilator
+    //  CL_alpha*(alpha - a0) + CLflaps + CL_de*de = CLreq
+    //  Cm_alpha*(alpha - alphaRef)     + Cm_de*de = 0
+    float rho = airDensity(-Zpos);
     float qbar = 0.5f*rho*V*V;
-    float Xde = -3.818e-6f*qbar*S, Zde = -0.3648f*qbar*S, Mde = -1.444f*qbar*S*cbar;
-    float mz = m - Zwd;
-
-    //State-space with w converted to alpha = w/V: column 1 scaled by V, row 1 divided by V
-    //States [u (m/s), alpha (rad), q (rad/s), theta (rad)]
-    //Inputs [stabilator (rad), thrust change (fraction of weight)]; thrust acts along x through the CG
-    //At 115 m/s / 1500 m: short period wn ~1.0 rad/s, zeta ~0.64; phugoid ~57 s period
-    Alon << Xu/m,                       Xw/m*V,                            0.0f,                               -g,
-            Zu/mz/V,                    Zw/mz,                             (Zq + m*V)/mz/V,                    0.0f,
-            (Mu + Zu*Mwd/mz)/Iyy,       (Mw + Zw*Mwd/mz)/Iyy*V,            (Mq + (Zq + m*V)*Mwd/mz)/Iyy,       0.0f,
-            0.0f,                       0.0f,                              1.0f,                               0.0f;
-
-    Blon << Xde/m,                      g,
-            Zde/mz/V,                   0.0f,
-            (Mde + Zde*Mwd/mz)/Iyy,     0.0f,
-            0.0f,                       0.0f;
-
-    //--- Lateral: B747 reference matrices (states [beta, p, r, phi], inputs [aileron, rudder])
-    //At 115 m/s / 1500 m: Dutch roll wn ~0.9 rad/s, zeta ~0.08; roll mode tau ~1.1 s; stable spiral
-    Alat << -0.0558f*fV,  0.0802f,      -0.9968f,     g/V,
-            -3.05f*fV2,  -0.4650f*fV,    0.388f*fV,   0.0f,
-             0.598f*fV2, -0.0318f*fV,   -0.115f*fV,   0.0f,
-             0.0f,        1.0f,          0.0805f,     0.0f;
-
-    Blat <<  0.0f,           0.00729f*fV,
-            -0.143f*fV2,     0.153f*fV2,
-            -0.00775f*fV2,  -0.475f*fV2,
-             0.0f,           0.0f;
+    u = V; v = 0.0f; w = 0.0f;               //so getFlaps() sees the trim speed
+    float flaps = getFlaps();
+    float CLreq = weight/(qbar*S);
+    float a0 = deg2rad(alphaZeroLift);
+    float b1 = CLreq - flapsCL*flaps + CL_alpha*a0;    // CL_alpha*alpha + CL_de*de = b1
+    float b2 = Cm_alpha*alphaRef;                      // Cm_alpha*alpha + Cm_de*de = b2
+    float det = CL_alpha*Cm_de - CL_de*Cm_alpha;
+    float alpha = (b1*Cm_de - CL_de*b2)/det;
+    de = (CL_alpha*b2 - Cm_alpha*b1)/det;
+    //Thrust = drag
+    float CL = liftCoefficient(alpha, flaps) + CL_de*de;
+    float gear = (flaps > 0.5f) ? 1.0f : 0.0f;
+    float CD = CD0 + flapsCD*flaps + gearCD*gear + K_induced*CL*CL;
+    throttle = qbar*S*CD/Tmax;
+    throttleCmd = throttle;
+    //Set body states
+    u = V*std::cos(alpha); w = V*std::sin(alpha); v = 0.0f;
+    p = q = r = 0.0f;
+    theta = alpha; phi = 0.0f;
+    alphaPrev = alpha;
 }
-
 
 Eigen::MatrixXf Aircraft::returnLongitudinalStates(){
-    return Xlon;
+    Eigen::MatrixXf X(4,1);
+    X << getSpeed(), std::atan2(w, u), q, theta;
+    return X;
 }
 
 Eigen::MatrixXf Aircraft::returnLateralStates(){
-    return Xlat;
+    Eigen::MatrixXf X(4,1);
+    X << std::asin(v/getSpeed()), p, r, phi;
+    return X;
 }
 
 float Aircraft::actuatorLimit(float u_cmd, float u_prev, float rateLimitDeg, float posLimitDeg){
@@ -106,15 +86,15 @@ float Aircraft::actuatorLimit(float u_cmd, float u_prev, float rateLimitDeg, flo
 }
 
 void Aircraft::setLongitudinalInput(float u_lon){
-    Ulon(0,0) = actuatorLimit(u_lon, Ulon(0,0), stabRateLimit, stabPosLimit);
+    de = actuatorLimit(u_lon, de, stabRateLimit, stabPosLimit);
 }
 
 void Aircraft::setLateralInput(float ail){
-    Ulat(0,0) = actuatorLimit(ail, Ulat(0,0), ailRateLimit, ailPosLimit);
+    da = actuatorLimit(ail, da, ailRateLimit, ailPosLimit);
 }
 
 float Aircraft::getRudder(){
-    return Ulat(1,0);
+    return dr;
 }
 
 void Aircraft::setPositions(float x, float y, float z){
@@ -131,8 +111,18 @@ std::tuple<float, float, float> Aircraft::getPosition(){
     return std::make_tuple(Xpos, Ypos, Zpos);
 }
 
+std::tuple<float, float, float> Aircraft::getVelocityNED(){
+    float cph = std::cos(phi), sph = std::sin(phi);
+    float cth = std::cos(theta), sth = std::sin(theta);
+    float cps = std::cos(psi), sps = std::sin(psi);
+    float Ndot = u*cth*cps + v*(sph*sth*cps - cph*sps) + w*(cph*sth*cps + sph*sps);
+    float Edot = u*cth*sps + v*(sph*sth*sps + cph*cps) + w*(cph*sth*sps - sph*cps);
+    float Ddot = -u*sth + v*sph*cth + w*cph*cth;
+    return std::make_tuple(Ndot, Edot, Ddot);
+}
+
 std::tuple<float, float, float> Aircraft::getActuators(){
-    return std::make_tuple(Ulon(0,0), Ulat(0,0), Ulat(1,0));
+    return std::make_tuple(de, da, dr);
 }
 
 float Aircraft::getHeading(){
@@ -140,27 +130,7 @@ float Aircraft::getHeading(){
 }
 
 float Aircraft::getSpeed(){
-    return V_a;
-}
-
-float Aircraft::airDensity(){
-    float h = -Zpos;
-    return 1.225f * std::pow(1.0f - 2.25577e-5f*h, 4.25588f);   //ISA troposphere density
-}
-
-float Aircraft::getFlaps(){
-    //Flaps extend with decreasing speed, as on a real approach
-    float f = (flapsUpSpeed - V_a)/(flapsUpSpeed - flapsFullSpeed);
-    if (f < 0.0f) f = 0.0f;
-    if (f > 1.0f) f = 1.0f;
-    return f;
-}
-
-float Aircraft::getTrimAlpha(){
-    //Lift coefficient needed for level flight, minus what the flaps provide, over the lift slope
-    float qbar = 0.5f*airDensity()*V_a*V_a;
-    float CL = weight/(qbar*wingArea);
-    return (CL - flapsCL*getFlaps())/CL_alpha + deg2rad(alphaZeroLift);
+    return std::sqrt(u*u + v*v + w*w);
 }
 
 void Aircraft::setThrottleCommand(float thr){
@@ -173,53 +143,88 @@ float Aircraft::getThrottle(){
     return throttle;
 }
 
+void Aircraft::setSpeedbrakeCommand(float sb){
+    if (sb > 1.0f) sb = 1.0f;
+    if (sb < 0.0f) sb = 0.0f;
+    speedbrakeCmd = sb;
+}
+
+float Aircraft::getSpeedbrake(){
+    return speedbrake;
+}
+
 void Aircraft::step(){
 
-    //Engine thrust follows the throttle command with a first-order spool lag
+    //---------------- Air data ----------------
+    float V = getSpeed();
+    float alpha = std::atan2(w, u);
+    float beta = std::asin(v/V);
+    float rho = airDensity(-Zpos);
+    float qbar = 0.5f*rho*V*V;
+    float alphaDot = (alpha - alphaPrev)/dT;
+    alphaPrev = alpha;
+    float qhat = q*cbar/(2.0f*V);
+    float adhat = alphaDot*cbar/(2.0f*V);
+    //Scale factors from the lateral reference condition
+    float fV  = (rho*V)/(rhoRef*VRef);
+    float fV2 = (rho*V*V)/(rhoRef*VRef*VRef);
+
+    //---------------- Engine ----------------
     throttle += dT*(throttleCmd - throttle)/engineTau;
-    Ulon(1,0) = throttle;
+    float T = throttle*Tmax;
+    //Speedbrakes move toward their command at a limited rate
+    float sbStep = speedbrakeCmd - speedbrake;
+    float sbMax = speedbrakeRate*dT;
+    if (sbStep > sbMax) sbStep = sbMax;
+    if (sbStep < -sbMax) sbStep = -sbMax;
+    speedbrake += sbStep;
 
-    //Linearize about the current true airspeed and altitude (air density)
-    updateAero();
+    //---------------- Longitudinal aerodynamics ----------------
+    float flaps = getFlaps();
+    float gear = (flaps > 0.5f) ? 1.0f : 0.0f;
+    float CLs = liftCoefficient(alpha, flaps);
+    float CL = CLs + CL_q*qhat + CL_adot*adhat + CL_de*de;
+    float CD = CD0 + flapsCD*flaps + gearCD*gear + speedbrakeCD*speedbrake + K_induced*CLs*CLs;
+    float Cm =Cm_alpha*(alpha - alphaRef) + Cm_q*qhat + Cm_adot*adhat + Cm_de*de;
+    float L = qbar*S*CL;
+    float D = qbar*S*CD;
+    //Wind axes -> body axes (x forward, z down)
+    float ca = std::cos(alpha), sa = std::sin(alpha);
+    float Xf = -D*ca + L*sa + T;
+    float Zf = -D*sa - L*ca;
 
-    //old yaw
-    float r_0 = Xlat(2,0);
+    //---------------- Lateral aerodynamics (B747 primed derivatives, scaled) ----------------
+    float Yf = mass*V*fV*(-0.0558f*beta + 0.00729f*dr);                 //side force (N)
+    float pdot_aero = fV2*(-3.05f*beta)  + fV*(-0.4650f*p + 0.388f*r)   + fV2*(-0.143f*da   + 0.153f*dr);
+    float rdot_aero = fV2*( 0.598f*beta) + fV*(-0.0318f*p - 0.115f*r)   + fV2*(-0.00775f*da - 0.475f*dr);
+    float qdot_aero = qbar*S*cbar*Cm/Iy;
 
-    // Longitudinal State Update
-    Xlon = Xlon + dT*(Alon * Xlon + Blon * Ulon);
+    //---------------- Equations of motion (body axes) ----------------
+    float cph = std::cos(phi), sph = std::sin(phi);
+    float cth = std::cos(theta), sth = std::sin(theta);
+    float udot = Xf/mass - g*sth       + r*v - q*w;
+    float vdot = Yf/mass + g*cth*sph   + p*w - r*u;
+    float wdot = Zf/mass + g*cth*cph   + q*u - p*v;
+    //Rotational, with inertial coupling (omega x I*omega)
+    float pdot = pdot_aero + (Iy - Iz)/Ix*q*r;
+    float qdot = qdot_aero + (Iz - Ix)/Iy*p*r;
+    float rdot = rdot_aero + (Ix - Iy)/Iz*p*q;
+    //Euler angle rates
+    float phidot = p + (q*sph + r*cph)*std::tan(theta);
+    float thetadot = q*cph - r*sph;
+    float psidot = (q*sph + r*cph)/cth;
+    //Earth-frame velocity
+    auto [Ndot, Edot, Ddot] = getVelocityNED();
 
-    // Move the speed perturbation into the true airspeed and re-center the model on it,
-    // so the linearization always stays at the aircraft's actual speed
-    V_a += Xlon(0,0);
-    Xlon(0,0) = 0.0f;
-
-    // Lateral State Update
-    Xlat = Xlat + dT*(Alat * Xlat + Blat * Ulat);
-
-    // Get states
-    float theta = Xlon(3,0);
-    float q = Xlon(2,0); 
-    float r = Xlat(2,0);
-    float p = Xlat(1,0);
-    float phi = Xlat(3,0);
-
-    // Yaw Derivative Update
-    dr_dt = (r - r_0)/dT; 
-
-    //Update rudder
-    Ulat(1,0) = Ulat(1,0) + dT*(0.16*dr_dt - 1.80*Ulat(1,0));
-
-    // Update Positions and Heading
-    // The aircraft moves along its flight path angle gamma = theta - alpha (not its nose
-    // direction theta), at its true airspeed V_a + u. Both theta and alpha are perturbations
-    // from level-flight trim, where trim theta = trim alpha, so gamma is exact to first order.
-    float alpha = Xlon(1,0);
-    float gamma = theta - alpha;
-    float V_true = V_a;
-    psi = psi + dT*((q*sin(phi) + r*cos(phi))/(cos(theta)));
+    //---------------- Integrate (Euler) ----------------
+    u += dT*udot; v += dT*vdot; w += dT*wdot;
+    p += dT*pdot; q += dT*qdot; r += dT*rdot;
+    phi += dT*phidot; theta += dT*thetadot; psi += dT*psidot;
     wrapRad(psi);
-    Xpos = Xpos + dT*(V_true*cos(gamma)*cos(psi));
-    Ypos = Ypos + dT*(V_true*cos(gamma)*sin(psi));
-    Zpos = Zpos + dT*(-V_true*sin(gamma));
+    Xpos += dT*Ndot; Ypos += dT*Edot; Zpos += dT*Ddot;
 
+    //---------------- Yaw damper (rudder) ----------------
+    float dr_dt = (r - r_prev)/dT;
+    r_prev = r;
+    dr = dr + dT*(0.16f*dr_dt - 1.80f*dr);
 }

@@ -44,6 +44,10 @@ void Simulator::runSim() {
     sys->setPositions(0.0f, 0.0f, Z_0);
     float psi_c = gnc->headingTo(0.0f, 0.0f, std::get<0>(WP1), std::get<1>(WP1));
     sys->setHeading(psi_c);
+
+    //Start in trimmed level flight at 115 m/s, with the autothrottle holding the trim thrust
+    sys->trim(115.0f);
+    ctrl->setThrottleTrim(sys->getThrottle());
     auto V_a = sys->getSpeed();
 
     //Initialize synthetic waypoint with a time horizon of 20s (customizable)
@@ -54,6 +58,9 @@ void Simulator::runSim() {
     auto RWY = gnc->returnWaypointNED(gnc->numWaypoints() - 1);
     //Previous carrot altitude, for its vertical speed
     float Zc_prev = 0.0f;
+    //Low-pass filtered angle of attack for the pitch attitude command, and its time constant (s)
+    float alpha_f = 0.0f;
+    const float alphaFilterTau = 5.0f;
 
     for (int i = 0; i < numTimesteps; ++i) {
 
@@ -91,20 +98,27 @@ void Simulator::runSim() {
         //Vertical speeds (Z is down): carrot from finite difference, aircraft from its flight path angle
         float Zdot_c = (i == 0) ? 0.0f : (Z_c - Zc_prev)/dT;
         Zc_prev = Z_c;
-        float Zdot = -V_a*std::sin(theta - Xlon(1,0));
-        float theta_c = gnc->pitchCommand(Z_c, Z, Zdot_c, Zdot);
+        float Zdot = std::get<2>(sys->getVelocityNED());
+        float alpha = Xlon(1,0);
+        //Guidance commands a flight path angle; pitch attitude = flight path + angle of attack.
+        //A slowly filtered alpha is used so the fast inner loop still holds pitch attitude
+        //(feeding back instantaneous alpha destabilizes the pitch loop at low speed)
+        if (i == 0) alpha_f = alpha;
+        alpha_f += dT*(alpha - alpha_f)/alphaFilterTau;
+        float gamma_c = gnc->pitchCommand(Z_c, Z, Zdot_c, Zdot);
+        float theta_c = gamma_c + alpha_f;
         float phi_c = gnc->rollCommand(psi_c, psi);
         float del_a = ctrl->aileronCommand(phi_c, phi, p);
         float del_e = ctrl->stabilatorCommand(theta_c, theta, q);
         //Autothrottle on speed error = true airspeed - scheduled airspeed
         float u_err = V_a - V_sched;
-        float alpha = Xlon(1,0);
         float thr_c = ctrl->throttleCommand(u_err);
 
         //Set control commands
         sys->setLateralInput(del_a);
         sys->setLongitudinalInput(del_e);
         sys->setThrottleCommand(thr_c);
+        sys->setSpeedbrakeCommand(ctrl->speedbrakeCommand(u_err, thr_c));
         
         //Step aircraft
         sys->step();
@@ -123,18 +137,18 @@ void Simulator::runSim() {
 
         //Absolute body angles for logging/visualization: the dynamics use perturbations from
         //level-flight trim (where trim pitch = trim alpha), so add the trim angle of attack back
-        float alpha0 = sys->getTrimAlpha();
-        float theta_body = theta + alpha0;
-        float alpha_body = alpha + alpha0;
+        float theta_body = theta;
+        float alpha_body = alpha;
 
         if (i % logFrequency == 0){
             //Log: t, X_a, Y_a, Z_a, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP,
-            //     V (true airspeed), alpha (body), speed error V - V_sched, thrust (T/W from trim), V_sched, flaps (0-1)
-            //     theta and alpha are absolute body angles (trim + perturbation); gamma = theta - alpha
+            //     V (true airspeed), alpha (body), speed error V - V_sched, throttle (0-1 of max thrust), V_sched,
+            //     flaps (0-1), speedbrake (0-1). theta and alpha are absolute body angles; gamma = theta - alpha
+            //     only in wings-level flight (the 6-DOF model computes the true flight path)
             PLOG_INFO << std::setprecision(12) << time << "," << std::get<0>(XYZ_a) << "," << std::get<1>(XYZ_a) << "," << std::get<2>(XYZ_a) << "," << lat_a << "," << lon_a << "," 
                         << alt_a << "," << phi << "," << theta_body << "," << psi << "," << del_e_act << "," << del_a_act << "," << del_r << ","
                         << std::get<0>(XYZ_SWP) << "," << std::get<1>(XYZ_SWP) << "," << std::get<2>(XYZ_SWP) << "," << V_a << ","
-                        << alpha_body << "," << u_err << "," << sys->getThrottle() << "," << V_sched << "," << sys->getFlaps();
+                        << alpha_body << "," << u_err << "," << sys->getThrottle() << "," << V_sched << "," << sys->getFlaps() << "," << sys->getSpeedbrake();
         }
 
 
