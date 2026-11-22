@@ -3,12 +3,12 @@
 Aircraft::Aircraft(){
     
     Alon = Eigen::MatrixXf(4,4);
-    Blon = Eigen::MatrixXf(4,1);
+    Blon = Eigen::MatrixXf(4,2);
     Alat = Eigen::MatrixXf(4,4);
     Blat = Eigen::MatrixXf(4,2);
     Xlon = Eigen::MatrixXf(4,1);
     Xlat = Eigen::MatrixXf(4,1);
-    Ulon = Eigen::MatrixXf(1,1);
+    Ulon = Eigen::MatrixXf(2,1);
     Ulat = Eigen::MatrixXf(2,1);
 
     updateAero();
@@ -23,7 +23,8 @@ Aircraft::Aircraft(){
              0.0,
              0.0;
 
-    Ulon << 0.0;
+    Ulon << 0.0,
+            0.0;
 
     Ulat << 0.0,
             0.0;
@@ -40,8 +41,7 @@ void Aircraft::updateAero(){
 
     //Reference condition and scale factors
     const float rho0 = 0.3045f, U0 = 235.9f;
-    float h = -Zpos;
-    float rho = 1.225f * std::pow(1.0f - 2.25577e-5f*h, 4.25588f);   //ISA troposphere density
+    float rho = airDensity();
     float V = V_a;
     float fV  = (rho*V)/(rho0*U0);
     float fV2 = (rho*V*V)/(rho0*U0*U0);
@@ -57,17 +57,18 @@ void Aircraft::updateAero(){
     float mz = m - Zwd;
 
     //State-space with w converted to alpha = w/V: column 1 scaled by V, row 1 divided by V
-    //States [u (m/s), alpha (rad), q (rad/s), theta (rad)], input [stabilator (rad)]
+    //States [u (m/s), alpha (rad), q (rad/s), theta (rad)]
+    //Inputs [stabilator (rad), thrust change (fraction of weight)]; thrust acts along x through the CG
     //At 115 m/s / 1500 m: short period wn ~1.0 rad/s, zeta ~0.64; phugoid ~57 s period
     Alon << Xu/m,                       Xw/m*V,                            0.0f,                               -g,
             Zu/mz/V,                    Zw/mz,                             (Zq + m*V)/mz/V,                    0.0f,
             (Mu + Zu*Mwd/mz)/Iyy,       (Mw + Zw*Mwd/mz)/Iyy*V,            (Mq + (Zq + m*V)*Mwd/mz)/Iyy,       0.0f,
             0.0f,                       0.0f,                              1.0f,                               0.0f;
 
-    Blon << Xde/m,
-            Zde/mz/V,
-            (Mde + Zde*Mwd/mz)/Iyy,
-            0.0f;
+    Blon << Xde/m,                      g,
+            Zde/mz/V,                   0.0f,
+            (Mde + Zde*Mwd/mz)/Iyy,     0.0f,
+            0.0f,                       0.0f;
 
     //--- Lateral: B747 reference matrices (states [beta, p, r, phi], inputs [aileron, rudder])
     //At 115 m/s / 1500 m: Dutch roll wn ~0.9 rad/s, zeta ~0.08; roll mode tau ~1.1 s; stable spiral
@@ -82,9 +83,6 @@ void Aircraft::updateAero(){
              0.0f,           0.0f;
 }
 
-void Aircraft::setSpeedCommand(float V){
-    V_cmd = V;
-}
 
 Eigen::MatrixXf Aircraft::returnLongitudinalStates(){
     return Xlon;
@@ -145,16 +143,43 @@ float Aircraft::getSpeed(){
     return V_a;
 }
 
+float Aircraft::airDensity(){
+    float h = -Zpos;
+    return 1.225f * std::pow(1.0f - 2.25577e-5f*h, 4.25588f);   //ISA troposphere density
+}
+
+float Aircraft::getFlaps(){
+    //Flaps extend with decreasing speed, as on a real approach
+    float f = (flapsUpSpeed - V_a)/(flapsUpSpeed - flapsFullSpeed);
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    return f;
+}
+
+float Aircraft::getTrimAlpha(){
+    //Lift coefficient needed for level flight, minus what the flaps provide, over the lift slope
+    float qbar = 0.5f*airDensity()*V_a*V_a;
+    float CL = weight/(qbar*wingArea);
+    return (CL - flapsCL*getFlaps())/CL_alpha + deg2rad(alphaZeroLift);
+}
+
+void Aircraft::setThrottleCommand(float thr){
+    if (thr > throttleMax) thr = throttleMax;
+    if (thr < throttleMin) thr = throttleMin;
+    throttleCmd = thr;
+}
+
+float Aircraft::getThrottle(){
+    return throttle;
+}
+
 void Aircraft::step(){
 
-    //Move airspeed toward the commanded speed at no more than maxAccel
-    float dV = V_cmd - V_a;
-    float maxStep = maxAccel * dT;
-    if (dV > maxStep) dV = maxStep;
-    if (dV < -maxStep) dV = -maxStep;
-    V_a += dV;
+    //Engine thrust follows the throttle command with a first-order spool lag
+    throttle += dT*(throttleCmd - throttle)/engineTau;
+    Ulon(1,0) = throttle;
 
-    //Update dynamics for the new airspeed and altitude
+    //Linearize about the current true airspeed and altitude (air density)
     updateAero();
 
     //old yaw
@@ -162,7 +187,12 @@ void Aircraft::step(){
 
     // Longitudinal State Update
     Xlon = Xlon + dT*(Alon * Xlon + Blon * Ulon);
-    
+
+    // Move the speed perturbation into the true airspeed and re-center the model on it,
+    // so the linearization always stays at the aircraft's actual speed
+    V_a += Xlon(0,0);
+    Xlon(0,0) = 0.0f;
+
     // Lateral State Update
     Xlat = Xlat + dT*(Alat * Xlat + Blat * Ulat);
 
@@ -180,10 +210,16 @@ void Aircraft::step(){
     Ulat(1,0) = Ulat(1,0) + dT*(0.16*dr_dt - 1.80*Ulat(1,0));
 
     // Update Positions and Heading
+    // The aircraft moves along its flight path angle gamma = theta - alpha (not its nose
+    // direction theta), at its true airspeed V_a + u. Both theta and alpha are perturbations
+    // from level-flight trim, where trim theta = trim alpha, so gamma is exact to first order.
+    float alpha = Xlon(1,0);
+    float gamma = theta - alpha;
+    float V_true = V_a;
     psi = psi + dT*((q*sin(phi) + r*cos(phi))/(cos(theta)));
     wrapRad(psi);
-    Xpos = Xpos + dT*(V_a*cos(theta)*cos(psi));
-    Ypos = Ypos + dT*(V_a*cos(theta)*sin(psi));
-    Zpos = Zpos + dT*(-V_a*sin(theta));
+    Xpos = Xpos + dT*(V_true*cos(gamma)*cos(psi));
+    Ypos = Ypos + dT*(V_true*cos(gamma)*sin(psi));
+    Zpos = Zpos + dT*(-V_true*sin(gamma));
 
 }

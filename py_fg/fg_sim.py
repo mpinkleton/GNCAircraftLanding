@@ -35,7 +35,7 @@ def runFG():
         time.sleep(0.025)
 
 def fdm_callback(fdm_data, event_pipe):
-    global i, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, V
+    global i, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, V, flaps
     fdm_data.lat_rad = Lat[i]
     fdm_data.lon_rad = Lon[i]
     fdm_data.alt_m = Alt[i]
@@ -49,6 +49,8 @@ def fdm_callback(fdm_data, event_pipe):
     fdm_data.left_aileron = -surfNorm(del_a[i])
     fdm_data.right_aileron = surfNorm(del_a[i])
     fdm_data.rudder = -surfNorm(del_r[i])
+    fdm_data.left_flap = flaps[i]    # 0 (up) .. 1 (full), already normalized
+    fdm_data.right_flap = flaps[i]
     fdm_data.vcas = V[i]*1.94384   # m/s -> knots
     #Gear down - try it
     if (Alt[i] < 900):
@@ -92,7 +94,8 @@ numeric_data = df["Message"].str.strip('"')
 # Split into 8 columns
 #t, X_a, Y_a, Z_a, Lat, Lon, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP
 cols = ["t", "X_a", "Y_a", "Z_a", "Lat", "Lon", "Alt", "phi", "theta",  "psi",
-        "del_e", "del_a", "del_r", "XWP", "YWP", "ZWP", "V"]
+        "del_e", "del_a", "del_r", "XWP", "YWP", "ZWP", "V",
+        "alpha", "V_err", "thrust", "V_sched", "flaps"]
 data = numeric_data.str.split(",", expand=True)
 data.columns = cols
 
@@ -119,6 +122,11 @@ WPX = data["XWP"].to_list()
 WPY = data["YWP"].to_list()
 WPZ = data["ZWP"].to_list()
 V = data["V"].to_list()   # airspeed (m/s)
+alpha = data["alpha"].to_list()       # body angle of attack (rad)
+flaps = data["flaps"].to_list()       # flap extension 0 (up) .. 1 (full landing flaps)
+V_err = data["V_err"].to_list()       # airspeed - scheduled airspeed (m/s)
+thrust = data["thrust"].to_list()     # thrust change from level-flight trim (fraction of weight)
+V_sched = data["V_sched"].to_list()   # scheduled airspeed (m/s)
 
 # Optional: view result
 #print(data.head())
@@ -202,6 +210,44 @@ axs[2, 1].plot(t, psi_deg, color='brown', linewidth=1.5)
 axs[2, 1].set_ylabel(r'$\psi$ (deg)')
 axs[2, 1].set_xlabel('Time (s)')
 axs[2, 1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+
+# ----------------------
+# Speed / energy: airspeed, autothrottle, angle of attack, flight path
+# ----------------------
+ms2kt = 1.94384
+alpha_deg = [item * r2d for item in alpha]
+gamma_deg = [(th - a) * r2d for th, a in zip(theta, alpha)]
+
+fig, axs = plt.subplots(4, 1, figsize=(10, 11), sharex=True)
+
+axs[0].plot(t, [v * ms2kt for v in V], color='blue', linewidth=1.5, label='Airspeed')
+axs[0].plot(t, [v * ms2kt for v in V_sched], color='gray', linestyle='--', linewidth=1.2, label='Scheduled')
+axs[0].set_ylabel('Airspeed (kt)')
+axs[0].set_title('Speed Control and Flight Path')
+axs[0].legend()
+axs[0].grid(True, alpha=0.3)
+
+axs[1].plot(t, thrust, color='red', linewidth=1.5)
+axs[1].axhline(-0.10, color='gray', linestyle=':', linewidth=1)   # idle + approach drag limit
+axs[1].set_ylabel('Thrust - drag (T/W)')
+axs[1].grid(True, alpha=0.3)
+
+axs[2].plot(t, alpha_deg, color='green', linewidth=1.5, label=r'$\alpha$ (body)')
+axs[2].set_ylabel(r'$\alpha$ (deg)')
+axs[2].grid(True, alpha=0.3)
+axf = axs[2].twinx()
+axf.plot(t, flaps, color='gray', linestyle='--', linewidth=1.2)
+axf.set_ylabel('Flaps (0-1)', color='gray')
+axf.set_ylim(-0.05, 1.05)
+
+axs[3].plot(t, theta_deg, color='orange', linewidth=1.5, label=r'Pitch $\theta$')
+axs[3].plot(t, gamma_deg, color='black', linewidth=1.2, label=r'Flight path $\gamma = \theta - \alpha$')
+axs[3].set_ylabel('Angle (deg)')
+axs[3].set_xlabel('Time (s)')
+axs[3].legend()
+axs[3].grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.show()

@@ -23,12 +23,30 @@ private:
     float Zpos{0.0f};
     //Heading
     float psi{0.0f};
-    //Airspeed (m/s), commanded airspeed, and max speed change rate (m/s^2, ~1.5 kt/s)
+    //True airspeed (m/s). The linear model is re-linearized about this speed every step:
+    //the speed perturbation u is integrated into V_a and then reset to zero.
     float V_a = 115.0f;
-    float V_cmd = 115.0f;
-    const float maxAccel = 0.75f;
+    //Engine: thrust minus level-flight drag at the current speed, as a fraction of weight (T/W),
+    //with a first-order spool-up/down lag. Min represents idle plus approach drag
+    //(flaps/gear/speedbrakes); max is the thrust available above level-flight trim.
+    float throttle{0.0f};
+    float throttleCmd{0.0f};
+    const float engineTau = 3.0f;
+    const float throttleMin = -0.10f;
+    const float throttleMax = 0.20f;
     //Rebuild A/B matrices for the current airspeed and altitude (air density)
     void updateAero();
+    //ISA air density at the current altitude (kg/m^3)
+    float airDensity();
+    //Trim (level flight) lift model, used for absolute angle of attack / pitch attitude.
+    //The A/B model works in perturbations from trim; these give the trim values back.
+    const float weight = 2.83176e6f;     //N (B747 reference weight)
+    const float wingArea = 511.0f;       //m^2
+    const float CL_alpha = 5.5f;         //lift slope (1/rad), typical large transport
+    const float alphaZeroLift = -3.0f;   //body angle of attack at zero lift, clean (deg) - estimate
+    const float flapsCL = 0.75f;         //lift added by full landing flaps (approximation)
+    const float flapsUpSpeed = 110.0f;   //flaps start extending below this speed (m/s, ~214 kt)
+    const float flapsFullSpeed = 85.0f;  //full landing flaps at/below this speed (m/s, ~165 kt)
     //Actuator rate limits (deg/s) - max change in surface deflection per second
     const float stabRateLimit = 60.0f;
     const float ailRateLimit = 60.0f;
@@ -51,8 +69,11 @@ public:
     float getHeading();
     std::tuple<float, float, float> getPosition();
     std::tuple<float, float, float> getActuators();
-    float getSpeed();
-    void setSpeedCommand(float V);
+    float getSpeed();            //true airspeed (m/s)
+    float getFlaps();            //flap extension 0 (up) .. 1 (full landing flaps)
+    float getTrimAlpha();        //trim body angle of attack for the current speed/altitude/flaps (rad)
+    void setThrottleCommand(float thr);
+    float getThrottle();
 };
 
 #endif

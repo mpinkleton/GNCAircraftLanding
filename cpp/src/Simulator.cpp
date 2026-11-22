@@ -52,6 +52,8 @@ void Simulator::runSim() {
 
     //Runway threshold (last waypoint) for the approach speed schedule
     auto RWY = gnc->returnWaypointNED(gnc->numWaypoints() - 1);
+    //Previous carrot altitude, for its vertical speed
+    float Zc_prev = 0.0f;
 
     for (int i = 0; i < numTimesteps; ++i) {
 
@@ -67,7 +69,6 @@ void Simulator::runSim() {
         else if (d_rwy >= 12000.0f) V_sched = 85.0f + (115.0f - 85.0f)*(d_rwy - 12000.0f)/6000.0f;
         else if (d_rwy >= 6000.0f)  V_sched = 75.0f + (85.0f - 75.0f)*(d_rwy - 6000.0f)/6000.0f;
         else                        V_sched = 75.0f;
-        sys->setSpeedCommand(V_sched);
         V_a = sys->getSpeed();
 
         //Set aircraft heading setpoint
@@ -87,14 +88,23 @@ void Simulator::runSim() {
         float theta = Xlon(3,0);
 
         //Calculate control commands
-        float theta_c = gnc->pitchCommand(Z_c, Z);
+        //Vertical speeds (Z is down): carrot from finite difference, aircraft from its flight path angle
+        float Zdot_c = (i == 0) ? 0.0f : (Z_c - Zc_prev)/dT;
+        Zc_prev = Z_c;
+        float Zdot = -V_a*std::sin(theta - Xlon(1,0));
+        float theta_c = gnc->pitchCommand(Z_c, Z, Zdot_c, Zdot);
         float phi_c = gnc->rollCommand(psi_c, psi);
         float del_a = ctrl->aileronCommand(phi_c, phi, p);
         float del_e = ctrl->stabilatorCommand(theta_c, theta, q);
+        //Autothrottle on speed error = true airspeed - scheduled airspeed
+        float u_err = V_a - V_sched;
+        float alpha = Xlon(1,0);
+        float thr_c = ctrl->throttleCommand(u_err);
 
         //Set control commands
         sys->setLateralInput(del_a);
         sys->setLongitudinalInput(del_e);
+        sys->setThrottleCommand(thr_c);
         
         //Step aircraft
         sys->step();
@@ -111,11 +121,20 @@ void Simulator::runSim() {
         //Get actual (rate-limited) actuator positions for logging
         auto [del_e_act, del_a_act, del_r] = sys->getActuators();
 
+        //Absolute body angles for logging/visualization: the dynamics use perturbations from
+        //level-flight trim (where trim pitch = trim alpha), so add the trim angle of attack back
+        float alpha0 = sys->getTrimAlpha();
+        float theta_body = theta + alpha0;
+        float alpha_body = alpha + alpha0;
+
         if (i % logFrequency == 0){
-            //Log: t, X_a, Y_a, Z_a, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP, V_a
+            //Log: t, X_a, Y_a, Z_a, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP,
+            //     V (true airspeed), alpha (body), speed error V - V_sched, thrust (T/W from trim), V_sched, flaps (0-1)
+            //     theta and alpha are absolute body angles (trim + perturbation); gamma = theta - alpha
             PLOG_INFO << std::setprecision(12) << time << "," << std::get<0>(XYZ_a) << "," << std::get<1>(XYZ_a) << "," << std::get<2>(XYZ_a) << "," << lat_a << "," << lon_a << "," 
-                        << alt_a << "," << phi << "," << theta << "," << psi << "," << del_e_act << "," << del_a_act << "," << del_r << ","
-                        << std::get<0>(XYZ_SWP) << "," << std::get<1>(XYZ_SWP) << "," << std::get<2>(XYZ_SWP) << "," << V_a;
+                        << alt_a << "," << phi << "," << theta_body << "," << psi << "," << del_e_act << "," << del_a_act << "," << del_r << ","
+                        << std::get<0>(XYZ_SWP) << "," << std::get<1>(XYZ_SWP) << "," << std::get<2>(XYZ_SWP) << "," << V_a << ","
+                        << alpha_body << "," << u_err << "," << sys->getThrottle() << "," << V_sched << "," << sys->getFlaps();
         }
 
 

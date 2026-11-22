@@ -4,8 +4,11 @@
 #include "common.h"
 
 struct LongitudinalGuidance{
-    //Pitch command (rad) per meter of altitude error. 0.02 => ~1 deg per 1 m (airliner-gentle)
-    float K_z = 0.02;
+    //Pitch command (rad) per meter of altitude error (0.01 => ~0.6 deg per 1 m)
+    float K_z = 0.01;
+    //Pitch command (rad) per m/s of vertical speed error - damps the altitude loop, which
+    //lags because the flight path (gamma = theta - alpha) trails pitch attitude by ~2 s
+    float K_hd = 0.03;
 };
 
 struct LateralGuidance{
@@ -31,7 +34,7 @@ public:
     void loadWaypointNED(float X, float Y, float Z);
     void loadWaypointLLA(float lat, float lon, float alt);  
     void constrainValue(float &val, float minVal, float maxVal);
-    float pitchCommand(float Z_c, float Z);
+    float pitchCommand(float Z_c, float Z, float Zdot_c, float Zdot);
     float rollCommand(float psi_c, float psi);
     void setOriginLLA(float lat0, float lon0, float alt0);
     std::tuple<double, double, double> NEDtoLLA(float x, float y, float z);

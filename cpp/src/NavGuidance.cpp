@@ -34,8 +34,9 @@ void NavGuidance::constrainValue(float &val, float minVal, float maxVal){
     if (val > maxVal) val = maxVal;
 }
 
-float NavGuidance::pitchCommand(float Z_c, float Z){
-    float theta_c = LongGNC.K_z * (Z - Z_c);
+float NavGuidance::pitchCommand(float Z_c, float Z, float Zdot_c, float Zdot){
+    //Altitude (Z, down) error plus vertical speed error damping
+    float theta_c = LongGNC.K_z * (Z - Z_c) + LongGNC.K_hd * (Zdot - Zdot_c);
     constrainValue(theta_c, -0.45, 0.45);
     return theta_c;
 }
