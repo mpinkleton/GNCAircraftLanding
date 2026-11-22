@@ -36,6 +36,18 @@ void Simulator::setLandingSite(float lat, float lon, float alt, float psi) {
     
 }
 
+void Simulator::setRudderJam(float distance, float angleDeg) {
+    rudderJamEnabled = true;
+    rudderJamDistance = distance;
+    rudderJamAngleDeg = angleDeg;
+}
+
+//Logged from its own function so the trajectory parser (which keeps Simulator::runSim rows) skips it
+void Simulator::logFailure(float time, float d_rwy) {
+    PLOG_INFO << "FAILURE: rudder jammed at " << rudderJamAngleDeg << " deg, t = " << time
+              << " s, " << d_rwy << " m from threshold";
+}
+
 void Simulator::runSim() {
 
     //Initialize aircraft heading and position
@@ -77,6 +89,12 @@ void Simulator::runSim() {
         else if (d_rwy >= 6000.0f)  V_sched = 75.0f + (85.0f - 75.0f)*(d_rwy - 6000.0f)/6000.0f;
         else                        V_sched = 75.0f;
         V_a = sys->getSpeed();
+
+        //Failure injection: rudder jam on final approach
+        if (rudderJamEnabled && !sys->isRudderJammed() && d_rwy <= rudderJamDistance) {
+            sys->jamRudder(deg2rad(rudderJamAngleDeg));
+            logFailure(time, d_rwy);
+        }
 
         //Set aircraft heading setpoint
         auto XYZ_SWP = gnc->returnSyntheticWaypoint();
@@ -143,12 +161,13 @@ void Simulator::runSim() {
         if (i % logFrequency == 0){
             //Log: t, X_a, Y_a, Z_a, Lat, Lon, Alt, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP,
             //     V (true airspeed), alpha (body), speed error V - V_sched, throttle (0-1 of max thrust), V_sched,
-            //     flaps (0-1), speedbrake (0-1). theta and alpha are absolute body angles; gamma = theta - alpha
+            //     flaps (0-1), speedbrake (0-1), roll spoiler (-1..1, + = rolling left).
+            //     theta and alpha are absolute body angles; gamma = theta - alpha
             //     only in wings-level flight (the 6-DOF model computes the true flight path)
             PLOG_INFO << std::setprecision(12) << time << "," << std::get<0>(XYZ_a) << "," << std::get<1>(XYZ_a) << "," << std::get<2>(XYZ_a) << "," << lat_a << "," << lon_a << "," 
                         << alt_a << "," << phi << "," << theta_body << "," << psi << "," << del_e_act << "," << del_a_act << "," << del_r << ","
                         << std::get<0>(XYZ_SWP) << "," << std::get<1>(XYZ_SWP) << "," << std::get<2>(XYZ_SWP) << "," << V_a << ","
-                        << alpha_body << "," << u_err << "," << sys->getThrottle() << "," << V_sched << "," << sys->getFlaps() << "," << sys->getSpeedbrake();
+                        << alpha_body << "," << u_err << "," << sys->getThrottle() << "," << V_sched << "," << sys->getFlaps() << "," << sys->getSpeedbrake() << "," << sys->getRollSpoiler();
         }
 
 

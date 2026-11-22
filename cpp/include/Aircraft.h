@@ -20,6 +20,9 @@ private:
     float da{0.0f};                          // aileron (rad), + = roll left
     float dr{0.0f};                          // rudder (rad), + = yaw left (driven by yaw damper)
     float r_prev{0.0f};                      // previous yaw rate, for the yaw damper
+    bool rudderJammed{false};                // failure: rudder stuck, yaw damper has no effect
+    float rudderJamAngle{0.0f};              // angle the rudder jams at (rad)
+    const float rudderRateLimit = 60.0f;     // rudder actuator rate (deg/s)
     float throttle{0.0f}, throttleCmd{0.0f}; // engine thrust as a fraction of max thrust
     const float engineTau = 3.0f;            // engine spool lag (s)
     const float throttleMin = 0.05f;         // idle
@@ -30,6 +33,16 @@ private:
     //Actuator position limits (deg) - max surface deflection either way
     const float stabPosLimit = 25.0f;
     const float ailPosLimit = 25.0f;
+    //Roll spoilers: panels rise on the down-going wing in proportion to the roll command
+    //beyond a small deadband, adding roll power (as on the real 777). Values are estimates,
+    //set for ~12 deg/s max roll rate on approach (ailerons alone give ~2.4 deg/s).
+    float rollSpoiler{0.0f};                 // -1..1, same sign as aileron (+ = roll left)
+    const float rollSpoilerDeadband = 0.10f; // fraction of full roll command before spoilers rise
+    const float rollSpoilerRate = 2.0f;      // deploy rate (fraction per second)
+    const float rollSpoilerL = 0.244f;       // roll acceleration at full deflection (reference condition)
+    const float rollSpoilerN = 0.02f;        // yaw toward the down-going wing (spoiler drag)
+    const float rollSpoilerCD = 0.010f;      // drag added at full deflection
+    const float rollSpoilerCL = 0.05f;       // lift lost at full deflection
     //Limit actuator to +/-posLimitDeg, and its change to rateLimitDeg*dT per timestep
     float actuatorLimit(float u_cmd, float u_prev, float rateLimitDeg, float posLimitDeg);
 
@@ -96,6 +109,11 @@ public:
     float getThrottle();
     void setSpeedbrakeCommand(float sb);
     float getSpeedbrake();
+    float getRollSpoiler();      //-1..1, + = spoilers up on the left wing (rolling left)
+    //Failure injection: rudder runs to angle (rad) at its actuator rate and stays there.
+    //Sign convention: + = yaw left, so a right-yaw jam is negative.
+    void jamRudder(float angle);
+    bool isRudderJammed() { return rudderJammed; }
 };
 
 #endif

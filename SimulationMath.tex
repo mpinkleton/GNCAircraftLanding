@@ -1,0 +1,233 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.9in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array}
+\usepackage[hidelinks]{hyperref}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+\newcommand{\sat}{\operatorname{sat}}
+\newcommand{\sgn}{\operatorname{sgn}}
+
+\title{GNCAircraftLanding: Simulation Mathematics}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3em}
+
+\section{States, frames and integration}
+Flat-earth NED frame $(N,E,D)$, body axes $(x,y,z)$ forward--right--down. Aircraft state
+\[
+\mathbf{x} = [\,u,\,v,\,w,\;p,\,q,\,r,\;\phi,\,\theta,\,\psi,\;N,\,E,\,D\,]^T
+\]
+plus actuator states $\delta_e,\delta_a,\delta_r,s,\delta_T,\delta_{sb}$. All states are advanced with explicit Euler,
+$\mathbf{x}_{k+1}=\mathbf{x}_k+\Delta t\,\dot{\mathbf{x}}_k$, $\Delta t = 0.01$~s.
+
+Sign conventions: $+\delta_e$ trailing edge down (nose down), $+\delta_a$ and $+s$ roll left, $+\delta_r$ yaw left.
+
+\section{Air data}
+\begin{gather*}
+V=\sqrt{u^2+v^2+w^2},\qquad \alpha=\operatorname{atan2}(w,u),\qquad \beta=\arcsin(v/V)\\
+\rho(h)=1.225\,(1-2.25577\times10^{-5}h)^{4.25588},\quad h=-D,\qquad \bar q=\tfrac12\rho V^2\\
+\hat q=\frac{q\bar c}{2V},\qquad \hat{\dot\alpha}=\frac{\dot\alpha\,\bar c}{2V},\qquad \dot\alpha\approx\frac{\alpha_k-\alpha_{k-1}}{\Delta t}
+\end{gather*}
+
+\section{Configuration}
+Flaps and gear are scheduled on airspeed:
+\[
+f=\sat_{[0,1]}\!\left(\frac{110-V}{110-85}\right),\qquad g=\begin{cases}1 & f>0.5\\0&\text{otherwise}\end{cases}
+\]
+
+\section{Longitudinal aerodynamics}
+Static lift with stall ($\alpha_0=-3^\circ$, $C_{L_\alpha}=5.5$):
+\begin{gather*}
+C_{L,\max}=1.5+0.9f,\qquad \alpha_s=\frac{C_{L,\max}-0.75f}{C_{L_\alpha}}+\alpha_0\\
+C_{L_s}(\alpha,f)=\begin{cases}
+C_{L_\alpha}(\alpha-\alpha_0)+0.75f & \alpha\le\alpha_s\\
+\max\!\big(C_{L,\max}-2(\alpha-\alpha_s),\;0.6\,C_{L,\max}\big) & \alpha>\alpha_s
+\end{cases}
+\end{gather*}
+Total coefficients:
+\begin{align*}
+C_L &= C_{L_s} + C_{L_q}\hat q + C_{L_{\dot\alpha}}\hat{\dot\alpha} + C_{L_{\delta_e}}\delta_e - 0.05|s|\\
+C_D &= 0.020 + 0.045f + 0.020g + 0.040\,\delta_{sb} + 0.010|s| + 0.045\,C_{L_s}^2\\
+C_m &= C_{m_\alpha}(\alpha-\alpha_{ref}) + C_{m_q}\hat q + C_{m_{\dot\alpha}}\hat{\dot\alpha} + C_{m_{\delta_e}}\delta_e
+\end{align*}
+$\alpha_{ref}$ places $C_m=0$ at $\delta_e=0$ in level flight at 115~m/s, 1500~m, clean:
+$\alpha_{ref}=W/(\bar q_{ref}S\,C_{L_\alpha})+\alpha_0$.
+
+Forces (wind to body) and pitch acceleration, with thrust $T=\delta_T T_{\max}$ along $x$:
+\begin{gather*}
+L=\bar q S C_L,\quad D_a=\bar q S C_D\\
+X=-D_a\cos\alpha+L\sin\alpha+T,\qquad Z=-D_a\sin\alpha-L\cos\alpha,\qquad \dot q_a=\frac{\bar q S\bar c\,C_m}{I_y}
+\end{gather*}
+
+Nondimensional coefficients are derived from the B747 dimensional derivatives (Etkin \& Reid, M0.8, 40{,}000~ft,
+$\rho_0=0.3045$, $U_0=235.9$~m/s):
+\begin{gather*}
+C_{m_\alpha}=\frac{M_w}{\tfrac12\rho_0U_0S\bar c}=-1.023,\quad
+C_{m_q}=\frac{M_q}{\tfrac14\rho_0U_0S\bar c^2}=-23.92,\quad
+C_{m_{\dot\alpha}}=\frac{M_{\dot w}}{\tfrac14\rho_0S\bar c^2}=-6.31\\
+C_{L_q}=\frac{-Z_q}{\tfrac14\rho_0U_0S\bar c}=5.92,\quad
+C_{L_{\dot\alpha}}=\frac{-Z_{\dot w}}{\tfrac14\rho_0S\bar c}=-5.90,\quad
+C_{L_{\delta_e}}=0.3648,\quad C_{m_{\delta_e}}=-1.444
+\end{gather*}
+Mach-dependent terms ($C_{m_u}$, $C_{L_u}$) are omitted; $C_{L_\alpha}$ uses a low-speed value.
+
+\section{Lateral-directional aerodynamics}
+B747 primed derivatives (accelerations, MathWorks/Etkin, same reference condition) scaled by
+\[
+f_V=\frac{\rho V}{\rho_0U_0},\qquad f_{V^2}=\frac{\rho V^2}{\rho_0U_0^2}
+\]
+(rate derivatives $\propto\rho V$; $\beta$ and control derivatives $\propto\rho V^2$):
+\begin{align*}
+Y &= mV f_V\,(-0.0558\,\beta + 0.00729\,\delta_r)\\
+\dot p_a &= f_{V^2}(-3.05\,\beta - 0.143\,\delta_a + 0.153\,\delta_r - 0.244\,s) + f_V(-0.465\,p + 0.388\,r)\\
+\dot r_a &= f_{V^2}(0.598\,\beta - 0.00775\,\delta_a - 0.475\,\delta_r - 0.02\,s) + f_V(-0.0318\,p - 0.115\,r)
+\end{align*}
+The roll-spoiler terms ($s$) are estimates sized for $\approx12^\circ$/s maximum roll rate on approach.
+
+\section{Equations of motion}
+Translational (body axes):
+\begin{align*}
+\dot u &= X/m - g\sin\theta + rv - qw\\
+\dot v &= Y/m + g\cos\theta\sin\phi + pw - ru\\
+\dot w &= Z/m + g\cos\theta\cos\phi + qu - pv
+\end{align*}
+Rotational, with inertial coupling ($I_{xz}$ neglected):
+\[
+\dot p=\dot p_a+\frac{I_y-I_z}{I_x}qr,\qquad
+\dot q=\dot q_a+\frac{I_z-I_x}{I_y}pr,\qquad
+\dot r=\dot r_a+\frac{I_x-I_y}{I_z}pq
+\]
+Euler kinematics:
+\[
+\dot\phi=p+(q\sin\phi+r\cos\phi)\tan\theta,\qquad
+\dot\theta=q\cos\phi-r\sin\phi,\qquad
+\dot\psi=\frac{q\sin\phi+r\cos\phi}{\cos\theta}
+\]
+Navigation, $[\dot N,\dot E,\dot D]^T = C_b^n(\phi,\theta,\psi)\,[u,v,w]^T$:
+\begin{align*}
+\dot N &= u\,c_\theta c_\psi + v(s_\phi s_\theta c_\psi - c_\phi s_\psi) + w(c_\phi s_\theta c_\psi + s_\phi s_\psi)\\
+\dot E &= u\,c_\theta s_\psi + v(s_\phi s_\theta s_\psi + c_\phi c_\psi) + w(c_\phi s_\theta s_\psi - s_\phi c_\psi)\\
+\dot D &= -u\,s_\theta + v\,s_\phi c_\theta + w\,c_\phi c_\theta
+\end{align*}
+
+\section{Actuators}
+Stabilator and aileron: position then rate limit,
+\[
+\delta_{k+1}=\delta_k+\sat_{\pm\dot\delta_{\max}\Delta t}\!\big(\sat_{\pm\delta_{\max}}(\delta_c)-\delta_k\big),\qquad
+\delta_{\max}=25^\circ,\ \dot\delta_{\max}=60^\circ/\text{s}
+\]
+Roll spoilers from the normalized roll command $w_a=\sat_{\pm1}(\delta_{a,c}/\delta_{\max})$, rate $2$/s:
+\[
+s_c=\sgn(w_a)\max\!\left(0,\frac{|w_a|-0.1}{0.9}\right)
+\]
+Engine and speedbrake:
+\[
+\dot\delta_T=\frac{\delta_{T,c}-\delta_T}{3},\quad \delta_{T,c}\in[0.05,1],\quad T_{\max}=0.3W;\qquad
+|\dot\delta_{sb}|\le0.5/\text{s}
+\]
+Yaw damper (rudder), with $\dot r$ by backward difference:
+\[
+\dot\delta_r = 0.16\,\dot r - 1.80\,\delta_r
+\]
+Rudder jam failure (at $d_{rwy}\le10$~km): yaw damper disconnected, $\delta_r\to\delta_{r,jam}$ at $60^\circ$/s.
+
+\section{Trim}
+Level flight at speed $V$: solve $L=W$ and $C_m=0$ (pre-stall) for $(\alpha,\delta_e)$,
+\[
+\begin{bmatrix} C_{L_\alpha} & C_{L_{\delta_e}}\\ C_{m_\alpha} & C_{m_{\delta_e}}\end{bmatrix}
+\begin{bmatrix}\alpha\\ \delta_e\end{bmatrix}
+=
+\begin{bmatrix} \dfrac{W}{\bar qS}-0.75f+C_{L_\alpha}\alpha_0\\[4pt] C_{m_\alpha}\alpha_{ref}\end{bmatrix},
+\qquad
+\delta_T=\frac{\bar qS\,C_D}{T_{\max}}
+\]
+then $u=V\cos\alpha$, $w=V\sin\alpha$, $\theta=\alpha$, $p=q=r=\phi=0$.
+
+\section{Guidance}
+Waypoints $\mathbf{P}_i$ in NED. The synthetic waypoint (carrot) $\mathbf{P}_c$ moves along segment
+$\mathbf{P}_{i-1}\to\mathbf{P}_i$ with look-ahead $R^*=V_0T_H$ ($V_0=115$~m/s, $T_H=20$~s):
+\begin{gather*}
+\psi_{12}=\operatorname{atan2}(E_i-E_{i-1},\,N_i-N_{i-1}),\qquad
+\theta_{12}=\arcsin\!\frac{D_{i-1}-D_i}{\|\mathbf{P}_i-\mathbf{P}_{i-1}\|}\\
+V_{wp}=V\frac{R^*}{\|\mathbf{P}_c-\mathbf{P}\|},\qquad
+\dot{\mathbf{P}}_c=V_{wp}\,[\cos\theta_{12}\cos\psi_{12},\ \cos\theta_{12}\sin\psi_{12},\ -\sin\theta_{12}]^T
+\end{gather*}
+with $i\leftarrow i+1$ when $\|\mathbf{P}_c-\mathbf{P}_i\|<10$~m. The final approach waypoint lies 12~km before the
+threshold on the runway course, 700~m above the threshold target altitude ($\approx3.3^\circ$).
+
+Lateral:
+\[
+\psi_c=\operatorname{atan2}(E_c-E,\,N_c-N),\qquad
+\phi_c=\sat_{\pm0.5}\big(K_\psi\,\mathrm{wrap}_{\pm\pi}(\psi_c-\psi)\big)
+\]
+Vertical (flight path angle command; $\dot D_c$ by backward difference):
+\[
+\gamma_c=\sat_{\pm0.15}\big(K_z(D-D_c)+K_{\dot h}(\dot D-\dot D_c)\big),\qquad
+\theta_c=\gamma_c+\alpha_f,\qquad \dot\alpha_f=\frac{\alpha-\alpha_f}{5}
+\]
+
+Speed schedule, $d$ = horizontal distance to the threshold (m):
+\[
+V_c(d)=\begin{cases}
+115 & d\ge18000\\
+85+30\,\frac{d-12000}{6000} & 12000\le d<18000\\
+75+10\,\frac{d-6000}{6000} & 6000\le d<12000\\
+75 & d<6000
+\end{cases}
+\]
+
+\section{Control laws}
+\begin{align*}
+\delta_{e,c} &= K_q\,q + K_\theta(\theta-\theta_c)\\
+\delta_{a,c} &= K_p\,p + K_\phi(\phi-\phi_c)\\
+\delta_{T,c} &= \delta_{T,trim} - K_u e_V - K_{ui}\textstyle\int e_V\,dt,\qquad e_V=V-V_c
+\end{align*}
+The integral is frozen when $\delta_{T,c}$ is saturated and $e_V$ would drive it further into saturation. Speedbrake:
+\[
+\delta_{sb,c}=\begin{cases}\sat_{[0,1]}\!\left(\dfrac{e_V-2}{8}\right) & \delta_{T,c}\le0.06\\ 0 & \text{otherwise}\end{cases}
+\]
+
+\section{Parameters}
+\begin{tabular}{@{}ll@{\qquad}ll@{}}
+\toprule
+$W$ & $2.832\times10^6$ N & $K_q,\ K_\theta$ & 2.5, 2.5 \\
+$S,\ \bar c$ & 511 m$^2$, 8.324 m & $K_p,\ K_\phi$ & 2.0, 4.0 \\
+$I_x,\ I_y,\ I_z$ & $0.247,\ 0.449,\ 0.673\times10^8$ kg\,m$^2$ & $K_\psi$ & 1.5 \\
+$T_{\max}$ & $0.3\,W$ & $K_z,\ K_{\dot h}$ & 0.01 rad/m, 0.03 rad/(m/s) \\
+$C_{L_\alpha},\ \alpha_0$ & 5.5, $-3^\circ$ & $K_u,\ K_{ui}$ & 0.15, 0.015 \\
+\bottomrule
+\end{tabular}
+
+\section{Verification: linearized modes}
+Numerical Jacobian of the 6-DOF model at trim ($\pm$ central differences):
+
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Mode & 115 m/s, 1500 m (clean) & 75 m/s, 200 m (flaps, gear) \\
+\midrule
+Short period & $\omega_n=1.006$, $\zeta=0.586$ & $\omega_n=0.727$, $\zeta=0.621$ \\
+Phugoid & $\omega_n=0.100$, $\zeta=0.034$ & $\omega_n=0.147$, $\zeta=0.027$ \\
+Dutch roll & $\omega_n=0.916$, $\zeta=0.091$ & $\omega_n=0.690$, $\zeta=0.038$ \\
+Roll & $\lambda=-0.896$ & $\lambda=-0.731$ \\
+Spiral & $\lambda=-0.013$ & $\lambda=-0.014$ \\
+\bottomrule
+\end{tabular}
+
+\section{Rudder jam: steady-state controllability}
+Straight flight ($p=r=\phi=0$) with a jammed rudder requires $\dot p_a=\dot r_a=0$. With normalized roll command
+$w_a\in[0,1]$, $\delta_a=w_a\delta_{\max}$ and $s=\max(0,(w_a-0.1)/0.9)$:
+\begin{align*}
+\beta &= \frac{0.00775\,\delta_a + 0.02\,s + 0.475\,\delta_r}{0.598}\\
+0 &= -3.05\,\beta - 0.143\,\delta_a + 0.153\,\delta_r - 0.244\,s
+\end{align*}
+(the $f_{V^2}$ factors cancel). Solving at $w_a=1$ gives the maximum holdable jam
+\[
+|\delta_{r,jam}|_{\max}=10.75^\circ.
+\]
+At $10^\circ$: $w_a=0.936$, $\beta=-5.9^\circ$ (simulation: lands, 13 m off centerline).
+At $11^\circ$ and above the roll command saturates and the aircraft turns into the jam.
+
+\end{document}

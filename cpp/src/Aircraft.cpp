@@ -91,6 +91,22 @@ void Aircraft::setLongitudinalInput(float u_lon){
 
 void Aircraft::setLateralInput(float ail){
     da = actuatorLimit(ail, da, ailRateLimit, ailPosLimit);
+    //Roll spoilers follow the roll command (normalized to full aileron) beyond the deadband
+    float wheel = ail/deg2rad(ailPosLimit);
+    if (wheel > 1.0f) wheel = 1.0f;
+    if (wheel < -1.0f) wheel = -1.0f;
+    float mag = (std::fabs(wheel) - rollSpoilerDeadband)/(1.0f - rollSpoilerDeadband);
+    if (mag < 0.0f) mag = 0.0f;
+    float spCmd = (wheel >= 0.0f) ? mag : -mag;
+    float spStep = spCmd - rollSpoiler;
+    float spMax = rollSpoilerRate*dT;
+    if (spStep > spMax) spStep = spMax;
+    if (spStep < -spMax) spStep = -spMax;
+    rollSpoiler += spStep;
+}
+
+float Aircraft::getRollSpoiler(){
+    return rollSpoiler;
 }
 
 float Aircraft::getRudder(){
@@ -153,6 +169,11 @@ float Aircraft::getSpeedbrake(){
     return speedbrake;
 }
 
+void Aircraft::jamRudder(float angle){
+    rudderJammed = true;
+    rudderJamAngle = angle;
+}
+
 void Aircraft::step(){
 
     //---------------- Air data ----------------
@@ -183,8 +204,10 @@ void Aircraft::step(){
     float flaps = getFlaps();
     float gear = (flaps > 0.5f) ? 1.0f : 0.0f;
     float CLs = liftCoefficient(alpha, flaps);
-    float CL = CLs + CL_q*qhat + CL_adot*adhat + CL_de*de;
-    float CD = CD0 + flapsCD*flaps + gearCD*gear + speedbrakeCD*speedbrake + K_induced*CLs*CLs;
+    float spAbs = std::fabs(rollSpoiler);
+    float CL = CLs + CL_q*qhat + CL_adot*adhat + CL_de*de - rollSpoilerCL*spAbs;
+    float CD = CD0 + flapsCD*flaps + gearCD*gear + speedbrakeCD*speedbrake + rollSpoilerCD*spAbs
+             + K_induced*CLs*CLs;
     float Cm =Cm_alpha*(alpha - alphaRef) + Cm_q*qhat + Cm_adot*adhat + Cm_de*de;
     float L = qbar*S*CL;
     float D = qbar*S*CD;
@@ -195,8 +218,10 @@ void Aircraft::step(){
 
     //---------------- Lateral aerodynamics (B747 primed derivatives, scaled) ----------------
     float Yf = mass*V*fV*(-0.0558f*beta + 0.00729f*dr);                 //side force (N)
-    float pdot_aero = fV2*(-3.05f*beta)  + fV*(-0.4650f*p + 0.388f*r)   + fV2*(-0.143f*da   + 0.153f*dr);
-    float rdot_aero = fV2*( 0.598f*beta) + fV*(-0.0318f*p - 0.115f*r)   + fV2*(-0.00775f*da - 0.475f*dr);
+    float pdot_aero = fV2*(-3.05f*beta)  + fV*(-0.4650f*p + 0.388f*r)   + fV2*(-0.143f*da   + 0.153f*dr)
+                    + fV2*(-rollSpoilerL*rollSpoiler);
+    float rdot_aero = fV2*( 0.598f*beta) + fV*(-0.0318f*p - 0.115f*r)   + fV2*(-0.00775f*da - 0.475f*dr)
+                    + fV2*(-rollSpoilerN*rollSpoiler);
     float qdot_aero = qbar*S*cbar*Cm/Iy;
 
     //---------------- Equations of motion (body axes) ----------------
@@ -226,5 +251,10 @@ void Aircraft::step(){
     //---------------- Yaw damper (rudder) ----------------
     float dr_dt = (r - r_prev)/dT;
     r_prev = r;
-    dr = dr + dT*(0.16f*dr_dt - 1.80f*dr);
+    if (rudderJammed) {
+        //Failure: rudder runs to the jam angle at its actuator rate and stays there
+        dr = actuatorLimit(rudderJamAngle, dr, rudderRateLimit, 30.0f);
+    } else {
+        dr = dr + dT*(0.16f*dr_dt - 1.80f*dr);
+    }
 }

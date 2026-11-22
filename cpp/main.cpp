@@ -24,6 +24,10 @@ int main(){
     //subtract 10 degrees from runway heading for FlightGear alignment
     sim->setLandingSite(43.6587, -79.6213, 290, 46.5);
 
+    //Failure: rudder jams at 11 deg causing a right yaw (sim convention: + = yaw left),
+    //10 km from the threshold on final approach. Comment out for a normal approach.
+    sim->setRudderJam(10000.0f, -11.0f);
+
     sim->runSim();
 
     return 0;

@@ -96,7 +96,7 @@ numeric_data = df["Message"].str.strip('"')
 #t, X_a, Y_a, Z_a, Lat, Lon, phi, theta, psi, del_e, del_a, del_r, X_SWP, Y_SWP, Z_SWP
 cols = ["t", "X_a", "Y_a", "Z_a", "Lat", "Lon", "Alt", "phi", "theta",  "psi",
         "del_e", "del_a", "del_r", "XWP", "YWP", "ZWP", "V",
-        "alpha", "V_err", "thrust", "V_sched", "flaps", "speedbrake"]
+        "alpha", "V_err", "thrust", "V_sched", "flaps", "speedbrake", "roll_spoiler"]
 data = numeric_data.str.split(",", expand=True)
 data.columns = cols
 
@@ -128,6 +128,7 @@ flaps = data["flaps"].to_list()       # flap extension 0 (up) .. 1 (full landing
 V_err = data["V_err"].to_list()       # airspeed - scheduled airspeed (m/s)
 thrust = data["thrust"].to_list()     # throttle, fraction of max thrust (0.05 = idle)
 speedbrake = data["speedbrake"].to_list()   # flight spoilers 0 (stowed) .. 1 (full)
+roll_spoiler = data["roll_spoiler"].to_list()   # roll spoilers -1..1, + = left wing up (rolling left)
 V_sched = data["V_sched"].to_list()   # scheduled airspeed (m/s)
 
 # Optional: view result
@@ -185,6 +186,10 @@ axs[0, 0].grid(True, alpha=0.3)
 axs[1, 0].plot(t, del_a_deg, color='red', linewidth=1.5)
 axs[1, 0].set_ylabel(r'$\delta_a$ (deg)')
 axs[1, 0].grid(True, alpha=0.3)
+ax_sp = axs[1, 0].twinx()
+ax_sp.plot(t, roll_spoiler, color='gray', linestyle='--', linewidth=1.2)
+ax_sp.set_ylabel('Roll spoiler (-1..1)', color='gray')
+ax_sp.set_ylim(-1.05, 1.05)
 
 # Rudder
 axs[2, 0].plot(t, del_r_deg, color='green', linewidth=1.5)
